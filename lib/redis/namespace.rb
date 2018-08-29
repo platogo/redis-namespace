@@ -341,7 +341,12 @@ class Redis
                "passthrough has been deprecated and will be removed in " +
                "redis-namespace 2.0 (at #{call_site})")
         end
-        @redis.send(command, *args, &block)
+
+        if @redis.respond_to?(:with)
+          @redis.with { |conn| conn.send(command, *args, &block) }
+        else
+          @redis.send(command, *args, &block)
+        end
       else
         super
       end
@@ -444,7 +449,12 @@ class Redis
       end
 
       # Dispatch the command to Redis and store the result.
-      result = @redis.send(command, *args, &block)
+      result = if @redis.respond_to?(:with)
+                 @redis.with { |conn| conn.send(command, *args, &block) }
+               else
+                 @redis.send(command, *args, &block)
+               end
+
 
       # Don't try to remove namespace from a Redis::Future, you can't.
       return result if result.is_a?(Redis::Future)
@@ -481,6 +491,25 @@ class Redis
 
     def namespaced_block(command, &block)
       redis.send(command) do |r|
+        begin
+          original, @redis = @redis, r
+          yield self
+        ensure
+          @redis = original
+        end
+      end
+    end
+
+    def namespaced_block(command, &block)
+      if redis.respond_to?(:with)
+        redis.with { |conn| ensure_redis_instance(conn, command, &block) }
+      else
+        ensure_redis_instance(redis, command, &block)
+      end
+    end
+
+    def ensure_redis_instance(conn, command)
+      conn.send(command) do |r|
         begin
           original, @redis = @redis, r
           yield self
